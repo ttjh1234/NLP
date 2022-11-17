@@ -83,37 +83,42 @@ def tensorsFromPair(input_lang,output_lang,pair):
     output_tensor=tensorFromSentence(output_lang,pair[1])
     return(input_tensor,output_tensor)
 
+
+
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, embed_dim,num_layers):
+    def __init__(self, input_dim, hidden_dim, embed_dim,num_layers,device):
         super().__init__()
         self.input_dim = input_dim
         self.embed_dim = embed_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.embedding = nn.Embedding(self.input_dim,self.embed_dim)
-        self.gru=nn.GRU(self.embed_dim,self.hidden_dim,num_layers=self.num_layers)
+        self.embedding = nn.Embedding(self.input_dim,self.embed_dim).to(device)
+        self.gru=nn.GRU(self.embed_dim,self.hidden_dim,num_layers=self.num_layers).to(device)
 
     def forward(self,src):
-        embedded = self.embedding(src).view(1,1,-1)
+        embedded = self.embedding(src)
         outputs, hidden = self.gru(embedded)
+        
+        # outputs : [sentence_length, batch, hidden_dim]
+        # hidden : [n_layer, batch, hidden_dim]
         return outputs, hidden
 
 class Decoder(nn.Module):
-    def __init__(self, output_dim,hidden_dim,embed_dim,num_layers):
+    def __init__(self, output_dim,hidden_dim,embed_dim,num_layers,device):
         super().__init__()
         self.embed_dim=embed_dim
         self.hidden_dim=hidden_dim
         self.output_dim=output_dim
         self.num_layers=num_layers
         
-        self.embedding=nn.Embedding(self.output_dim, self.embed_dim)
-        self.gru= nn. GRU(self.embed_dim,self.hidden_dim,self.num_layers)
-        self.out = nn.Linear(self.hidden_dim, output_dim)
-        self.softmax = nn.LogSoftmax(dim=1)       
+        self.embedding=nn.Embedding(self.output_dim, self.embed_dim).to(device)
+        self.gru= nn.GRU(self.embed_dim,self.hidden_dim,self.num_layers).to(device)
+        self.out = nn.Linear(self.hidden_dim, output_dim).to(device)
+        self.softmax = nn.LogSoftmax(dim=1).to(device)
 
     def forward(self, input, hidden):
         input = input.view(1,-1)
-        embed = F.relu(self.embedding(input))
+        embed = self.embedding(input)
         output, hidden = self.gru(embed,hidden)
         prediction = self.softmax(self.out(output[0]))
         return prediction, hidden
@@ -128,14 +133,14 @@ class Seq2Seq(nn.Module):
         self.device=device
         
     def forward(self,input_lang,output_lang,teacher_forcing_ratio=0.5):
-        input_length=input_lang.size(0)
+        
         batch_size=output_lang.shape[1]
         target_length= output_lang.shape[0]
         vocab_size=self.decoder.output_dim
         outputs= torch.zeros(target_length,batch_size,vocab_size).to(self.device)
         
-        for i in range(input_length):
-            encoder_output, encoder_hidden =self.encoder(input_lang[i])
+
+        _ , encoder_hidden =encoder(input_lang)
         decoder_hidden=encoder_hidden.to(self.device)
         decoder_input=torch.tensor([SOS_token],device=self.device)
         
@@ -143,16 +148,16 @@ class Seq2Seq(nn.Module):
             decoder_output, decoder_hidden = self.decoder(decoder_input,decoder_hidden)
             outputs[t]=decoder_output
             teacher_force=random.random() < teacher_forcing_ratio
-            topv, topi = decoder_output.topk(1)
-            input = (output_lang[t] if teacher_force else topi)
-            if (teacher_force == False) & (input.item() == EOS_token):
+            _ , topi = decoder_output.topk(1)
+            decoder_input = (output_lang[t] if teacher_force else topi)
+            if (teacher_force == False) & (decoder_input.item() == EOS_token):
                 break
         return outputs
 
 
 def Model(model, input_tensor, target_tensor, model_optimizer, criterion):
     model_optimizer.zero_grad()
-    input_length = input_tensor.size(0)
+    
     loss=0
     epoch_loss=0
     output = model(input_tensor,target_tensor)
@@ -173,7 +178,8 @@ def trainModel(model, input_lang,output_lang,pairs,num_iteration=20000):
     total_loss_iterations=0
     
     training_pairs=[tensorsFromPair(input_lang,output_lang,random.choice(pairs)) for _ in range(num_iteration)]
-    
+
+
     for iter in range(1, num_iteration+1):
         training_pair=training_pairs[iter-1]
         input_tensor=training_pair[0]
@@ -181,8 +187,8 @@ def trainModel(model, input_lang,output_lang,pairs,num_iteration=20000):
         loss=Model(model,input_tensor,target_tensor,optimizer,criterion)
         total_loss_iterations+=loss
         
-        if iter % 5000 == 0 :
-            average_loss = total_loss_iterations / 5000
+        if iter % 100 == 0 :
+            average_loss = total_loss_iterations / 100
             total_loss_iterations=0
             print('%d %.4f' % (iter,average_loss))
     
@@ -191,14 +197,15 @@ def trainModel(model, input_lang,output_lang,pairs,num_iteration=20000):
     return model
 
 def evaluate(model, input_lang, output_lang, sentences):
-    model.eval()
+    #model.eval()
     with torch.no_grad():
         input_tensor=tensorFromSentence(input_lang,sentences[0])
         output_tensor=tensorFromSentence(output_lang,sentences[1])
         decoded_words=[]
-        
+                
         output=model(input_tensor,output_tensor)
         
+        #print(output)
         for ot in range(output.size(0)):
             topv, topi = output[ot].topk(1)
             
@@ -220,6 +227,123 @@ def evaluate_randomly(model,input_lang,output_lang,pairs,n=10):
         print('predicted {}'.format(output_sentence))
 
 
+def train_and_evaluate():
+    lang1= 'eng'
+    lang2= 'kor'
+    teacher_forcing_ratio = 0.5
+
+
+    input_lang, output_lang, pairs = process_data(lang1,lang2)
+
+    randomize = random.choice(pairs)
+    print('random sentence : {}'.format(randomize))
+
+    input_size = input_lang.n_words
+    output_size = output_lang.n_words
+    print('Input : {} Output : {}'.format(input_size,output_size))
+
+    embed_size=256
+    hidden_size=512
+    num_layers=2
+    num_iteration=50000
+
+    encoder=Encoder(input_size, hidden_size , embed_size, num_layers,device=device)
+    decoder=Decoder(output_size, hidden_size , embed_size, num_layers,device=device)
+
+
+    model = Seq2Seq(encoder,decoder,device,teacher_forcing_ratio)
+
+    model = trainModel(model,input_lang,output_lang,pairs,num_iteration)
+
+    evaluate_randomly(model,input_lang,output_lang,pairs,n=20)
+
+
+class Attention(nn.Module):
+    def __init__(self, hidden_size,device):
+        super().__init__()
+        self.hidden_size=hidden_size
+        self.device= device
+        
+        self.attn=nn.Linear(self.hidden_size *2,self.hidden_size).to(self.device)
+        self.v = nn.Linear(self.hidden_size,1,bias=False).to(self.device)
+        
+        
+    def forward(self,hidden, encoder_outputs):
+
+        src_len = encoder_outputs.shape[0]
+        hidden=hidden.repeat(1,src_len,1)
+        
+        encoder_outputs= encoder_outputs.permute(1,0,2)
+        energy=torch.tanh(self.attn(torch.cat((hidden,encoder_outputs),dim=2)))
+        attention=self.v(energy).squeeze(2)
+        
+        attention_score = F.softmax(attention,dim=1).unsqueeze(1)
+
+        return attention_score
+
+
+class AttentionDecoder(nn.Module):
+    def __init__(self, hidden_size, output_size, device, attention, max_length=MAX_LENGTH):
+        super().__init__()
+        self.hidden_size=hidden_size
+        self.output_size=output_size
+        self.max_length=max_length
+        self.device= device
+        self.attention = attention
+        
+        self.embedding=nn.Embedding(self.output_size,self.hidden_size).to(self.device)       
+        self.gru= nn.GRU(self.hidden_size*2,self.hidden_size).to(self.device)
+        self.out= nn.Linear(self.hidden_size,self.output_size).to(self.device)
+        self.softmax = nn.LogSoftmax(dim=1).to(self.device)
+        
+    def forward(self,input, hidden, encoder_outputs):
+        embed = self.embedding(input).view(1,1,-1)
+        
+        attention_score = self.attention(hidden, encoder_outputs)
+        encoder_outputs=encoder_outputs.permute(1,0,2)
+        
+        weighted=torch.bmm(attention_score,encoder_outputs)
+
+        # 1, 1, 1024
+        gru_input = torch.cat((embed,weighted),dim=2)
+        
+        output, hidden = self.gru(gru_input,hidden)
+        prediction = self.softmax(self.out(output[0]))
+        
+        return prediction, hidden
+        
+class AttSeq2Seq(nn.Module):
+    def __init__(self,encoder,decoder,device):
+        super().__init__()
+
+        self.encoder=encoder
+        self.decoder=decoder
+        self.device=device
+        
+    def forward(self,input_lang,output_lang,teacher_forcing_ratio=0.5):
+        
+        batch_size=output_lang.shape[1]
+        target_length= output_lang.shape[0]
+        vocab_size=self.decoder.output_size
+        outputs= torch.zeros(target_length,batch_size,vocab_size).to(self.device)
+        
+
+        encoder_outputs , encoder_hidden = self.encoder(input_lang)
+        
+        decoder_hidden=encoder_hidden.to(self.device)
+        decoder_input=torch.tensor([SOS_token],device=self.device)
+        
+        for t in range(target_length):
+            decoder_output, decoder_hidden = self.decoder(decoder_input,decoder_hidden,encoder_outputs)
+            outputs[t]=decoder_output
+            teacher_force=random.random() < teacher_forcing_ratio
+            _ , topi = decoder_output.topk(1)
+            decoder_input = (output_lang[t] if teacher_force else topi)
+            if (teacher_force == False) & (decoder_input.item() == EOS_token):
+                break
+        return outputs
+
+
 lang1= 'eng'
 lang2= 'kor'
 teacher_forcing_ratio = 0.5
@@ -237,17 +361,22 @@ print('Input : {} Output : {}'.format(input_size,output_size))
 embed_size=256
 hidden_size=512
 num_layers=1
-num_iteration=75000
+num_iteration=50000
 
-encoder=Encoder(input_size, hidden_size , embed_size, num_layers)
-decoder=Decoder(output_size, hidden_size , embed_size, num_layers)
-
-model = Seq2Seq(encoder,decoder,device).to(device)
-
-print(encoder)
-print(decoder)
+encoder=Encoder(input_size, hidden_size , embed_size, num_layers,device=device)
+attention=Attention(hidden_size,device)
+decoder=AttentionDecoder(hidden_size, output_size, device, attention)
+model = AttSeq2Seq(encoder,decoder,device)
 
 model = trainModel(model,input_lang,output_lang,pairs,num_iteration)
+
+evaluate_randomly(model,input_lang,output_lang,pairs,n=20)
+
+
+encoder=Encoder
+
+
+
 
 
 
