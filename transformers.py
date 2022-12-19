@@ -1,6 +1,6 @@
 # Use : IMDB Datasets
 # For : Solve Sentence Classification Problem
-# But, Implement Decoder. (Later other project using it.)
+# But, Implement Encoder - Decoder Structure. (Later other project using it.)
 
 import torch
 import torch.nn as nn
