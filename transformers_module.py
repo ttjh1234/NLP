@@ -37,15 +37,27 @@ class Encoder(nn.Module):
     def forward(self, src, src_mask):
         #src = [batch size, src len]
         #src_mask = [batch size, 1, 1, src len]
-        batch_size = src.shape[0]
-        src_len = src.shape[1]
         
-        #pos = [batch size, src len]
-        pos = torch.arange(0,src_len).unsqueeze(0).repeat(batch_size,1).to(device)
+        if src.dim==2:
+            batch_size = src.shape[0]
+            src_len = src.shape[1]
         
-        # src = [batch size, src len, hid dim]
-        # src: input embedding에 scale을 곱해주고 positional encoding 더함.
-        src = self.dropout((self.tok_embedding(src) * self.scale) + self.pos_embedding(pos))
+            #pos = [batch size, src len]
+            pos = torch.arange(0,src_len).unsqueeze(0).repeat(batch_size,1).to(device)
+        
+            # src = [batch size, src len, hid dim]
+            # src: input embedding에 scale을 곱해주고 positional encoding 더함.
+            src = self.dropout((self.tok_embedding(src) * self.scale) + self.pos_embedding(pos))
+        else:
+            batch_size = src.shape[0]
+            src_len = src.shape[1]
+        
+            #pos = [batch size, src len]
+            pos = torch.arange(0,src_len).unsqueeze(0).repeat(batch_size,1).to(device)
+        
+            # src = [batch size, src len, hid dim]
+            # src: input embedding에 scale을 곱해주고 positional encoding 더함.
+            src = self.dropout((src * self.scale) + self.pos_embedding(pos))
         
         for layer in self.layers:
           src = layer(src, src_mask)
@@ -352,10 +364,14 @@ class sentiment_classification(nn.Module):
     
     def make_src_mask(self, src):
         #src = [batch size, src len]
-        
-        src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
-        #src_mask = [batch size, 1, 1, src len]
-
+        if src.dim==2:        
+            src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
+            #src_mask = [batch size, 1, 1, src len]
+        else:
+            n_batch=src.shape[0]
+            n_length=src.shape[1]
+            n_emb_length=src.shape[2]
+            src_mask = (torch.sum(torch.eq(torch.flatten(src,0,1),src[0][0]),dim=1)==n_emb_length).view(n_batch,n_length).unsqueeze(1).unsqueeze(2)
         return src_mask
     
     def forward(self,input):
