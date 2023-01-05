@@ -38,7 +38,7 @@ class Encoder(nn.Module):
         #src = [batch size, src len]
         #src_mask = [batch size, 1, 1, src len]
         
-        if src.dim==2:
+        if src.dim()==2:
             batch_size = src.shape[0]
             src_len = src.shape[1]
         
@@ -358,20 +358,24 @@ class sentiment_classification(nn.Module):
         self.output_dim = output_dim
         self.src_pad_idx = src_pad_idx
         self.device=device
-        self.linear1 = nn.Linear(self.hidden_dim,self.hidden_dim//2)
-        self.linear2 = nn.Linear(self.hidden_dim//2,self.output_dim)
+        self.linear1 = nn.Linear(self.hidden_dim,self.hidden_dim)
+        self.linear2 = nn.Linear(self.hidden_dim,self.output_dim)
         self.sigmoid= nn.Sigmoid()
     
+    def get_pad_embedding(self,src_pad_idx):
+        return self.encoder.tok_embedding.weight[src_pad_idx]
+            
     def make_src_mask(self, src):
         #src = [batch size, src len]
-        if src.dim==2:        
+        if src.dim()==2:        
             src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
             #src_mask = [batch size, 1, 1, src len]
         else:
+            pad_embed=self.get_pad_embedding(self.src_pad_idx)
             n_batch=src.shape[0]
             n_length=src.shape[1]
             n_emb_length=src.shape[2]
-            src_mask = (torch.sum(torch.eq(torch.flatten(src,0,1),src[0][0]),dim=1)==n_emb_length).view(n_batch,n_length).unsqueeze(1).unsqueeze(2)
+            src_mask = (torch.sum(torch.eq(torch.flatten(src,0,1),pad_embed),dim=1)!=n_emb_length).view(n_batch,n_length).unsqueeze(1).unsqueeze(2)
         return src_mask
     
     def forward(self,input):
@@ -521,4 +525,107 @@ def epoch_time(start_time, end_time):
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
+
+
+def train_kor(model, iterator, optimizer, criterion, clip):
+    
+    model.train()
+    
+    epoch_loss = 0
+    
+    for _, batch in enumerate(iterator):
+        
+        optimizer.zero_grad()
+        
+        src = batch[0].to(device)
+        target = batch[1].to(device).to(torch.float32)
+        
+        output = model(src)
+            
+        output=output.view(-1)
+        output = output.contiguous()
+            
+        loss = criterion(output, target)
+        loss.backward()
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+        optimizer.step()
+        epoch_loss += loss.item()
+        
+    return epoch_loss / len(iterator)
+
+
+def evaluate_kor(model, iterator, criterion):
+    
+    model.eval()
+    epoch_loss = 0
+    
+    with torch.no_grad():
+        for _, batch in enumerate(iterator):
+
+            src = batch[0].to(device)
+            trg = batch[1].to(device).to(torch.float32)
+            output = model(src)
+            
+            #output = [batch size, trg len - 1, output dim]
+            #trg = [batch size, trg len]
+            
+            output=output.view(-1)
+            output = output.contiguous()
+        
+            loss = criterion(output, trg)
+            epoch_loss += loss.item()
+        
+    return epoch_loss / len(iterator)
+
+def accuracy_score_kor(model,train,valid,test):
+    model.eval()
+    
+    total_train=0
+    train_acc=0
+    total_valid=0
+    valid_acc=0
+    total_test=0
+    test_acc=0
+        
+    with torch.no_grad():
+        for _, batch in enumerate(train):
+            total_train+=batch[0].shape[0]
+            src = batch[0].to(device)
+            trg = batch[1].to(device).to(torch.float32) 
+            output = model(src)
+            output=output.view(-1)
+            output = torch.where(output>=0.5,1,0)
+            train_acc+=torch.sum(torch.where(output==trg,1,0))
+    
+    train_accuracy=train_acc/total_train
+
+    with torch.no_grad():
+        for _, batch in enumerate(valid):
+            total_valid+=batch[0].shape[0]
+            src = batch[0].to(device)
+            trg = batch[1].to(device).to(torch.float32) 
+            output = model(src)
+            output=output.view(-1)
+            output = torch.where(output>=0.5,1,0)
+            valid_acc+=torch.sum(torch.where(output==trg,1,0))
+    
+    valid_accuracy=valid_acc/total_valid
+    
+    with torch.no_grad():
+        for _, batch in enumerate(test):
+            total_test+=batch[0].shape[0]
+            src = batch[0].to(device)
+            trg = batch[1].to(device).to(torch.float32)
+            output = model(src)
+            output=output.view(-1)
+            output = torch.where(output>=0.5,1,0)
+            test_acc+=torch.sum(torch.where(output==trg,1,0))
+    
+    test_accuracy=test_acc/total_test
+
+    print("--------------------------------------------")
+    print("Train Accuracy : ",train_accuracy)
+    print("Valid Accuracy : ",valid_accuracy)
+    print("Test Accuracy : ",test_accuracy)
+    print("--------------------------------------------")
 
